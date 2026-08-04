@@ -1,3 +1,76 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  /* ----- Dark Theme (default) ----- */
+  --color-background: #0b1326;
+  --color-on-background: #dae2fd;
+  --color-primary: #89ceff;
+  --color-on-primary: #00344d;
+  --color-secondary: #b7c8e1;
+  --color-on-secondary: #213145;
+  --color-surface: #0b1326;
+  --color-on-surface: #dae2fd;
+  --color-surface-container: #171f33;
+  --color-surface-container-lowest: #060e20;
+  --color-surface-container-low: #131b2e;
+  --color-surface-container-high: #222a3d;
+  --color-surface-container-highest: #2d3449;
+  --color-surface-variant: #2d3449;
+  --color-on-surface-variant: #bec8d2;
+  --color-outline: #88929b;
+  --color-outline-variant: #3e4850;
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+  --color-primary-container: #0ea5e9;
+  --color-on-primary-container: #003751;
+  --color-secondary-container: #3a4a5f;
+  --color-on-secondary-container: #a9bad3;
+  --color-tertiary: #ffb2b7;
+  --color-tertiary-container: #ff697b;
+  --color-on-tertiary: #67001b;
+  --color-on-tertiary-container: #6c001d;
+  --color-inverse-surface: #dae2fd;
+  --color-inverse-on-surface: #283044;
+  --color-inverse-primary: #006591;
+  --color-surface-tint: #89ceff;
+
+  /* ----- Light Theme overrides (applied via .light) ----- */
+  --color-background-light: #f8faff;
+  --color-on-background-light: #1a1f3a;
+  --color-surface-light: #f8faff;
+  --color-on-surface-light: #1a1f3a;
+  /* add more if needed */
+}
+
+@layer base {
+  /* Default dark */
+  :root {
+    --bg: var(--color-background);
+    --text: var(--color-on-background);
+    --surface: var(--color-surface);
+    --on-surface: var(--color-on-surface);
+    --primary: var(--color-primary);
+    --on-primary: var(--color-on-primary);
+    /* ... map all variables */
+  }
+  .dark {
+    --bg: var(--color-background);
+    --text: var(--color-on-background);
+    --surface: var(--color-surface);
+    --on-surface: var(--color-on-surface);
+    /* ... */
+  }
+  .light {
+    --bg: var(--color-background-light);
+    --text: var(--color-on-background-light);
+    --surface: var(--color-surface-light);
+    --on-surface: var(--color-on-surface-light);
+    /* ... */
+  }
+  body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+  }
+}

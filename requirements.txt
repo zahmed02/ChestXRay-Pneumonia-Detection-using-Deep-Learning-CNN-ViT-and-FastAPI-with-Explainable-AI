@@ -43,3 +43,6 @@ gunicorn>=21.2.0
 
 # Additional utilities
 python-magic>=0.4.27
+
+groq
+python-dotenv

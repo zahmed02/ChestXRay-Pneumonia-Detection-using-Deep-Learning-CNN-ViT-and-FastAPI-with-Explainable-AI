@@ -1,92 +1,110 @@
+import os
 import io
-import base64
-import torch
-import numpy as np
-from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
+import uuid
+from datetime import datetime
+from fastapi import APIRouter, File, UploadFile, Form, Depends, HTTPException
+from sqlalchemy.orm import Session
 from PIL import Image
+import torch
 from torchvision import transforms
-from api.schemas import PredictionResponse
-from api.dependencies import load_model, device
-import matplotlib.pyplot as plt
 
-# Optional: Grad-CAM (fallback if torchcam is not installed)
-try:
-    from torchcam.methods import GradCAM
-    TORCHCAM_AVAILABLE = True
-except ImportError:
-    TORCHCAM_AVAILABLE = False
-    print("⚠️ torchcam not installed. Grad-CAM disabled.")
+from api.database import SessionLocal
+from api import crud, models
+from api.dependencies import get_model, device
+
+# Import Grad-CAM utility
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.gradcam import generate_gradcam
 
 router = APIRouter()
 
-# Standard ImageNet normalization
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-def generate_heatmap(model, input_tensor, pred_idx):
-    """Generate Grad-CAM heatmap if torchcam is available."""
-    if not TORCHCAM_AVAILABLE:
-        return None
-    
+def get_db():
+    db = SessionLocal()
     try:
-        # ResNet50 uses layer4 as target
-        with GradCAM(model, target_layer="layer4") as cam_extractor:
-            out = model(input_tensor)
-            activations = cam_extractor(pred_idx, out)
-            if not activations:
-                return None
-            activation = activations[0].cpu().numpy()
-            # Normalize and resize heatmap
-            heatmap = np.maximum(activation, 0)
-            heatmap /= heatmap.max() if heatmap.max() > 0 else 1
-            # Resize to original image size (224x224 for simplicity)
-            import cv2
-            heatmap = cv2.resize(heatmap, (224, 224))
-            heatmap = np.uint8(255 * heatmap)
-            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-            # Convert to PIL and then to base64
-            heatmap_img = Image.fromarray(heatmap)
-            buffered = io.BytesIO()
-            heatmap_img.save(buffered, format="PNG")
-            heatmap_b64 = base64.b64encode(buffered.getvalue()).decode()
-            return f"data:image/png;base64,{heatmap_b64}"
-    except Exception as e:
-        print(f"Grad-CAM failed: {e}")
-        return None
+        yield db
+    finally:
+        db.close()
 
-@router.post("/predict", response_model=PredictionResponse)
-async def predict(file: UploadFile = File(...)):
-    # Validate file type
+@router.post("/predict")
+async def predict(
+    file: UploadFile = File(...),
+    patient_id: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    # 1. Validate and read image
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
-    
-    # Read and preprocess image
+
     contents = await file.read()
-    try:
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid image file.")
-    
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+    # 2. Generate patient ID if not provided
+    if not patient_id:
+        patient_id = f"PX-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+    # 3. Save original image to disk
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    img_filename = f"{patient_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{ext}"
+    img_path = os.path.join(UPLOAD_DIR, img_filename)
+    with open(img_path, "wb") as buffer:
+        buffer.write(contents)
+
+    # 4. Run inference
     input_tensor = transform(image).unsqueeze(0).to(device)
-    
-    # Load model
-    model = load_model()
-    
-    # Inference
+    model = get_model()
     with torch.no_grad():
         logits = model(input_tensor)
         probs = torch.softmax(logits, dim=1)
         confidence, pred_idx = torch.max(probs, dim=1)
-        class_name = "PNEUMONIA" if pred_idx.item() == 1 else "NORMAL"
-    
-    # Generate heatmap (if available)
-    heatmap_b64 = generate_heatmap(model, input_tensor, pred_idx.item())
-    
-    return PredictionResponse(
-        class_name=class_name,
-        confidence=confidence.item(),
-        heatmap_base64=heatmap_b64
+        diagnosis = "PNEUMONIA" if pred_idx.item() == 1 else "NORMAL"
+        confidence = confidence.item()
+
+    # 5. Generate Grad-CAM heatmap
+    heatmap_path = None
+    try:
+        target_class = pred_idx.item()
+        heatmap_filename = f"{patient_id}_heatmap_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg"
+        heatmap_path_full = os.path.join(UPLOAD_DIR, heatmap_filename)
+        
+        generate_gradcam(
+            model=model,
+            input_tensor=input_tensor,
+            target_class=target_class,
+            original_image=image,
+            save_path=heatmap_path_full
+        )
+        heatmap_path = heatmap_path_full
+        print(f"Heatmap saved: {heatmap_path}")
+    except Exception as e:
+        print(f"Grad-CAM generation failed: {e}")
+        heatmap_path = None
+
+    # 6. Save to database
+    db_pred = crud.create_prediction(
+        db=db,
+        patient_id=patient_id,
+        diagnosis=diagnosis,
+        confidence=confidence,
+        image_path=img_path,
+        heatmap_path=heatmap_path
     )
+
+    # 7. Return response
+    return {
+        "patient_id": patient_id,
+        "class_name": diagnosis,
+        "confidence": confidence,
+        "heatmap_base64": None,
+        "image_url": f"/uploads/{img_filename}",
+        "heatmap_url": f"/uploads/{heatmap_filename}" if heatmap_path else None
+    }

@@ -1,36 +1,44 @@
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import predict
+from fastapi.staticfiles import StaticFiles
+
+from api.database import engine
+from api import models                     # <-- correct import
+from api.routers import predict, history, stats, explain
 from api.dependencies import load_model
-import mlflow
 
-# Optional: Set tracking URI if using MLflow
-# mlflow.set_tracking_uri("http://localhost:5000")
+# Create tables
+models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(
-    title="Chest X-Ray Pneumonia Detection API",
-    description="Deep Learning model (CNN/ViT) with Explainable AI (Grad-CAM) for detecting pneumonia.",
-    version="1.0.0"
-)
+app = FastAPI(title="PneumoniaAI API", version="1.0.0")
 
-# Allow CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to specific origins in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(predict.router, prefix="/api/v1", tags=["Prediction"])
+app.include_router(history.router, prefix="/api/v1", tags=["History"])
+app.include_router(stats.router, prefix="/api/v1", tags=["Stats"])
+app.include_router(explain.router, prefix="/api/v1", tags=["Explainability"])
+
+# Serve uploaded files
+if os.path.exists("uploads"):
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 @app.on_event("startup")
-async def startup_event():
-    # Preload the model into memory when the server starts
-    load_model()
+async def startup():
+    load_model()  # preload model
     print("Model loaded successfully.")
 
 @app.get("/health")
-async def health_check():
-    return {"status": "OK", "message": "Service is running"}
-
-# Include routers
-app.include_router(predict.router, prefix="/api/v1", tags=["Prediction"])
+async def health():
+    return {"status": "OK"}
