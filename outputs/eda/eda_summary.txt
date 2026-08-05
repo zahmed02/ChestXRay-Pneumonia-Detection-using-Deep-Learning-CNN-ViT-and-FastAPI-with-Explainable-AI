@@ -1,0 +1,42 @@
+
+    ================================================================================
+    PNEUMONIA DETECTION - EDA SUMMARY REPORT
+    ================================================================================
+    Generated: 2026-08-05 12:24:13
+
+    DATASET OVERVIEW
+    --------------------------------------------------------------------------------
+    Training:   5216 images (1341 NORMAL, 3875 PNEUMONIA)
+    Validation: 16 images (8 NORMAL, 8 PNEUMONIA)
+    Test:       624 images (234 NORMAL, 390 PNEUMONIA)
+
+    MODEL PERFORMANCE (Test Set)
+    --------------------------------------------------------------------------------
+    Accuracy:   0.8413
+    AUC-ROC:    0.9480
+    F1-Macro:   0.8095
+    F1-Weighted:0.8290
+
+    Classification Report:
+                  precision    recall  f1-score   support
+
+      NORMAL       1.00      0.58      0.73       234
+   PNEUMONIA       0.80      1.00      0.89       390
+
+    accuracy                           0.84       624
+   macro avg       0.90      0.79      0.81       624
+weighted avg       0.87      0.84      0.83       624
+
+
+    Confusion Matrix:
+    [[135  99]
+ [  0 390]]
+
+    Error Analysis:
+    --------------------------------------------------------------------------------
+    Total Misclassified: 99
+    False Positives: 99 (NORMAL -> PNEUMONIA)
+    False Negatives: 0 (PNEUMONIA -> NORMAL)
+
+    ================================================================================
+    

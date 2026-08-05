@@ -130,7 +130,7 @@ def ask_about_image(
         model=GROQ_VISION_MODEL,
         messages=messages,
         temperature=0.4,
-        max_completion_tokens=4096,  # was 900 — hidden reasoning eats into this budget too
+        max_completion_tokens=2048,
         top_p=1,
         stream=False,
         reasoning_format="hidden",
