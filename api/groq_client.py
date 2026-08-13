@@ -39,6 +39,13 @@ SYSTEM_PROMPT = (
     "color overlay (red/yellow = regions that most influenced the AI's "
     "prediction, blue/green = regions that influenced it least). You are also "
     "told the classifier's diagnosis (NORMAL or PNEUMONIA) and its confidence.\n\n"
+    "You may also be given a RETRIEVED CONTEXT section, sourced from a local "
+    "knowledge base of curated radiology reference notes and/or summaries of "
+    "similar past cases from this system's own history, each tagged like "
+    "[KB1] or [Case #17]. When you use information from this context, cite "
+    "the tag inline (e.g. '...consistent with lobar consolidation [KB1].'). "
+    "If the retrieved context is empty or not relevant to the question, "
+    "answer from the images alone and do not fabricate citations or sources.\n\n"
     "When answering, you must actually reference what you see in BOTH images "
     "separately and connect them:\n"
     "1. Describe concrete findings in the original X-ray relevant to pneumonia: "
@@ -70,6 +77,7 @@ def build_messages(
     heatmap_path: Optional[str],
     history: List[Dict[str, str]],
     question: str,
+    retrieved_context: Optional[str] = None,
 ) -> List[Dict]:
     image_data_url = encode_image_to_data_url(image_path)
 
@@ -81,9 +89,13 @@ def build_messages(
                 f"Question: {question}"
             ),
         },
-        {"type": "text", "text": "Image 1 (original chest X-ray):"},
-        {"type": "image_url", "image_url": {"url": image_data_url}},
     ]
+
+    if retrieved_context:
+        content_blocks.append({"type": "text", "text": retrieved_context})
+
+    content_blocks.append({"type": "text", "text": "Image 1 (original chest X-ray):"})
+    content_blocks.append({"type": "image_url", "image_url": {"url": image_data_url}})
 
     if heatmap_path and os.path.exists(heatmap_path):
         content_blocks.append(
@@ -95,14 +107,12 @@ def build_messages(
 
     messages: List[Dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # Replay prior turns as plain text so the model has conversational context
     for turn in history:
         role = turn.get("role")
         text = turn.get("content", "")
         if role in ("user", "assistant") and text:
             messages.append({"role": role, "content": text})
 
-    # Current turn always carries the image(s), so the model can "look" fresh each time
     messages.append({"role": "user", "content": content_blocks})
     return messages
 
@@ -122,9 +132,12 @@ def ask_about_image(
     heatmap_path: Optional[str],
     history: List[Dict[str, str]],
     question: str,
+    retrieved_context: Optional[str] = None,
 ) -> str:
     client = get_groq_client()
-    messages = build_messages(diagnosis, confidence, image_path, heatmap_path, history, question)
+    messages = build_messages(
+        diagnosis, confidence, image_path, heatmap_path, history, question, retrieved_context
+    )
 
     completion = client.chat.completions.create(
         model=GROQ_VISION_MODEL,
@@ -140,7 +153,6 @@ def ask_about_image(
     answer = _strip_thinking(choice.message.content)
 
     if not answer:
-        # Ran out of budget mid-reasoning, or the model returned nothing usable
         raise RuntimeError(
             f"The model didn't return a usable answer (finish_reason={choice.finish_reason}). "
             "Try asking a shorter, more specific question."

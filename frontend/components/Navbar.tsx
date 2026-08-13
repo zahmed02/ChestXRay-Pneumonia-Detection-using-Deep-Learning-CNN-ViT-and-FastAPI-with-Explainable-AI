@@ -10,7 +10,6 @@ export default function Navbar() {
   const navItems = [
     { name: 'Predict', href: '/' },
     { name: 'History', href: '/history' },
-    { name: 'About', href: '/about' },
   ]
 
   return (

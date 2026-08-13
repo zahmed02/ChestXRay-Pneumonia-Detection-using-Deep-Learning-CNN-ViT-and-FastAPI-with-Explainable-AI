@@ -11,6 +11,7 @@ from torchvision import transforms
 from api.database import SessionLocal
 from api import crud, models
 from api.dependencies import get_model, device
+from api.rag import index_case
 
 # Import Grad-CAM utility
 import sys
@@ -75,7 +76,7 @@ async def predict(
         target_class = pred_idx.item()
         heatmap_filename = f"{patient_id}_heatmap_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.jpg"
         heatmap_path_full = os.path.join(UPLOAD_DIR, heatmap_filename)
-        
+
         generate_gradcam(
             model=model,
             input_tensor=input_tensor,
@@ -98,6 +99,18 @@ async def predict(
         image_path=img_path,
         heatmap_path=heatmap_path
     )
+
+    # 6b. Seed a minimal entry in the case vector store (best-effort; gets
+    # enriched with real findings once the user asks the AI to explain it)
+    try:
+        index_case(
+            prediction_id=db_pred.id,
+            diagnosis=diagnosis,
+            confidence=confidence,
+            description=f"{diagnosis} case ({confidence * 100:.1f}% confidence), no AI explanation generated yet.",
+        )
+    except Exception as e:
+        print(f"Warning: failed to index case {db_pred.id} into vector store: {e}")
 
     # 7. Return response
     return {

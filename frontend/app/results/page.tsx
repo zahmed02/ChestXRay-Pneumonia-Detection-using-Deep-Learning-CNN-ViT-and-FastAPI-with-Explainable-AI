@@ -1,3 +1,4 @@
+/* D:\IT-Project-2\frontend\app\results\page.tsx */
 'use client'
 
 import { useState, useEffect } from 'react'
@@ -29,9 +30,22 @@ interface PredictionDetail {
   heatmap_url?: string | null
 }
 
+interface RetrievedSource {
+  type: 'knowledge' | 'case'
+  label: string
+  snippet: string
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  sources?: RetrievedSource[]
+}
+
+interface LoadedImage {
+  dataUrl: string
+  width: number
+  height: number
 }
 
 export default function ResultsPage() {
@@ -44,11 +58,15 @@ export default function ResultsPage() {
   const [contrast, setContrast] = useState(100)
   const [invert, setInvert] = useState(false)
 
-  // --- Explainable AI chat state ---
+  // --- Explainable AI / RAG chat state ---
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
   const [question, setQuestion] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
+
+  // --- PDF report state ---
+  const [reportGenerating, setReportGenerating] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) {
@@ -85,7 +103,7 @@ export default function ResultsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: userMessage.content,
-          history: chatHistory, // prior turns only; current question passed separately above
+          history: chatHistory,
         }),
       })
       if (!res.ok) {
@@ -93,7 +111,10 @@ export default function ResultsPage() {
         throw new Error(err?.detail || 'Failed to get an explanation')
       }
       const data = await res.json()
-      setChatHistory([...nextHistory, { role: 'assistant', content: data.answer }])
+      setChatHistory([
+        ...nextHistory,
+        { role: 'assistant', content: data.answer, sources: data.sources || [] },
+      ])
     } catch (err) {
       setChatError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
@@ -101,29 +122,163 @@ export default function ResultsPage() {
     }
   }
 
-  const downloadReport = () => {
-    if (!prediction) return
-    const doc = new jsPDF()
-    doc.setFontSize(18)
-    doc.text('PneumoniaAI - Diagnostic Report', 14, 22)
-    doc.setFontSize(12)
-    doc.text(`Patient ID: ${prediction.patient_id}`, 14, 32)
-    doc.text(`Date: ${new Date(prediction.created_at).toLocaleString()}`, 14, 38)
-    doc.text(`Diagnosis: ${prediction.diagnosis}`, 14, 44)
-    doc.text(`Confidence: ${(prediction.confidence * 100).toFixed(1)}%`, 14, 50)
+  // Loads an image (possibly cross-origin) onto an offscreen canvas and
+  // returns it as a base64 JPEG data URL, optionally with a full color
+  // inversion applied via the canvas 2D context's filter.
+  const loadImageAsDataUrl = (url: string, invertColors: boolean = false): Promise<LoadedImage> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth
+        canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('Canvas 2D context unavailable'))
+          return
+        }
+        if (invertColors) {
+          ctx.filter = 'invert(100%)'
+        }
+        ctx.drawImage(img, 0, 0)
+        resolve({
+          dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        })
+      }
+      img.onerror = () => reject(new Error(`Failed to load image for report: ${url}`))
+      img.src = url
+    })
+  }
 
-    if (chatHistory.length > 0) {
-      doc.text('AI Q&A Session:', 14, 58)
-      let y = 64
-      chatHistory.forEach((m) => {
-        const prefix = m.role === 'user' ? 'Q: ' : 'A: '
-        const lines = doc.splitTextToSize(prefix + m.content, 180)
-        doc.text(lines, 14, y)
-        y += lines.length * 6 + 2
-      })
+  const addImageBlock = (
+    doc: jsPDF,
+    loaded: LoadedImage | null,
+    label: string,
+    x: number,
+    y: number,
+    maxW: number,
+    maxH: number
+  ) => {
+    doc.setFontSize(9)
+    doc.setTextColor(80)
+    doc.text(label, x, y)
+    const boxY = y + 3
+
+    if (!loaded) {
+      doc.setDrawColor(200)
+      doc.rect(x, boxY, maxW, maxH)
+      doc.setFontSize(8)
+      doc.setTextColor(150)
+      doc.text('Not available', x + 4, boxY + maxH / 2)
+      return
     }
 
-    doc.save(`report_${prediction.patient_id}.pdf`)
+    const ratio = Math.min(maxW / loaded.width, maxH / loaded.height)
+    const w = loaded.width * ratio
+    const h = loaded.height * ratio
+    doc.addImage(loaded.dataUrl, 'JPEG', x, boxY, w, h)
+  }
+
+  const downloadReport = async () => {
+    if (!prediction) return
+    setReportGenerating(true)
+    setReportError(null)
+
+    try {
+      const originalUrl = `${API_URL}${prediction.image_url}`
+      const heatmapUrl = prediction.heatmap_url ? `${API_URL}${prediction.heatmap_url}` : null
+
+      // Load all 4 image variants in parallel: original, heatmap, and both inverted
+      const [originalImg, heatmapImg, invertedOriginalImg, invertedHeatmapImg] = await Promise.all([
+        loadImageAsDataUrl(originalUrl, false).catch(() => null),
+        heatmapUrl ? loadImageAsDataUrl(heatmapUrl, false).catch(() => null) : Promise.resolve(null),
+        loadImageAsDataUrl(originalUrl, true).catch(() => null),
+        heatmapUrl ? loadImageAsDataUrl(heatmapUrl, true).catch(() => null) : Promise.resolve(null),
+      ])
+
+      const doc = new jsPDF()
+
+      // --- Header ---
+      doc.setFontSize(18)
+      doc.setTextColor(0)
+      doc.text('PneumoniaAI - Diagnostic Report', 14, 22)
+      doc.setFontSize(12)
+      doc.text(`Patient ID: ${prediction.patient_id}`, 14, 32)
+      doc.text(`Date: ${new Date(prediction.created_at).toLocaleString()}`, 14, 38)
+      doc.text(`Diagnosis: ${prediction.diagnosis}`, 14, 44)
+      doc.text(`Confidence: ${(prediction.confidence * 100).toFixed(1)}%`, 14, 50)
+
+      // --- 2x2 image grid: original, heatmap, and both inverted ---
+      doc.setFontSize(13)
+      doc.text('Diagnostic Images', 14, 60)
+
+      const colW = 85
+      const rowH = 65
+      const col1X = 14
+      const col2X = 105
+      const row1Y = 66
+      const row2Y = 140
+
+      addImageBlock(doc, originalImg, 'Original X-Ray', col1X, row1Y, colW, rowH)
+      addImageBlock(doc, heatmapImg, 'Grad-CAM Heatmap', col2X, row1Y, colW, rowH)
+      addImageBlock(doc, invertedOriginalImg, 'Original X-Ray (Inverted)', col1X, row2Y, colW, rowH)
+      addImageBlock(doc, invertedHeatmapImg, 'Grad-CAM Heatmap (Inverted)', col2X, row2Y, colW, rowH)
+
+      // --- AI Q&A transcript ---
+      let y = row2Y + rowH + 15
+      if (y > 260) {
+        doc.addPage()
+        y = 20
+      }
+      doc.setFontSize(13)
+      doc.setTextColor(0)
+      doc.text('AI Q&A Session', 14, y)
+      y += 8
+
+      if (chatHistory.length === 0) {
+        doc.setFontSize(10)
+        doc.setTextColor(100)
+        doc.text('No questions were asked during this session.', 14, y)
+      } else {
+        chatHistory.forEach((m) => {
+          const prefix = m.role === 'user' ? 'Q: ' : 'A: '
+          doc.setFontSize(10)
+          doc.setTextColor(m.role === 'user' ? 20 : 60)
+          const lines = doc.splitTextToSize(prefix + m.content, 180)
+
+          if (y + lines.length * 5 > 280) {
+            doc.addPage()
+            y = 20
+          }
+          doc.text(lines, 14, y)
+          y += lines.length * 5 + 2
+
+          if (m.sources && m.sources.length > 0) {
+            const sourceLine = `Sources: ${m.sources.map((s) => s.label).join(', ')}`
+            const sourceLines = doc.splitTextToSize(sourceLine, 180)
+            doc.setFontSize(8)
+            doc.setTextColor(130)
+            if (y + sourceLines.length * 4 > 280) {
+              doc.addPage()
+              y = 20
+            }
+            doc.text(sourceLines, 14, y)
+            y += sourceLines.length * 4 + 3
+          } else {
+            y += 3
+          }
+        })
+      }
+
+      doc.save(`report_${prediction.patient_id}.pdf`)
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : 'Failed to generate the report')
+    } finally {
+      setReportGenerating(false)
+    }
   }
 
   if (loading) {
@@ -209,54 +364,26 @@ export default function ResultsPage() {
 
       {/* Controls */}
       <div className="flex flex-wrap justify-center items-center gap-2 bg-surface-container-lowest rounded-full px-4 py-2 border border-outline-variant max-w-fit mx-auto">
-        <button
-          onClick={handleZoomIn}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Zoom In"
-        >
+        <button onClick={handleZoomIn} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Zoom In">
           <MdZoomIn size={24} />
         </button>
-        <button
-          onClick={handleZoomOut}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Zoom Out"
-        >
+        <button onClick={handleZoomOut} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Zoom Out">
           <MdZoomOut size={24} />
         </button>
-        <button
-          onClick={handleZoomReset}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Reset Zoom"
-        >
+        <button onClick={handleZoomReset} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Reset Zoom">
           <MdPanTool size={24} />
         </button>
         <div className="w-px h-6 bg-outline-variant mx-1"></div>
-        <button
-          onClick={handleBrightnessUp}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Increase Brightness"
-        >
+        <button onClick={handleBrightnessUp} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Increase Brightness">
           <MdBrightness6 size={24} />
         </button>
-        <button
-          onClick={handleBrightnessDown}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Decrease Brightness"
-        >
+        <button onClick={handleBrightnessDown} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Decrease Brightness">
           <MdBrightness6 size={24} style={{ opacity: 0.5 }} />
         </button>
-        <button
-          onClick={handleContrastUp}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Increase Contrast"
-        >
+        <button onClick={handleContrastUp} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Increase Contrast">
           <MdContrast size={24} />
         </button>
-        <button
-          onClick={handleContrastDown}
-          className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high"
-          title="Decrease Contrast"
-        >
+        <button onClick={handleContrastDown} className="text-on-surface hover:text-primary transition-colors p-1 rounded-full hover:bg-surface-container-high" title="Decrease Contrast">
           <MdContrast size={24} style={{ opacity: 0.5 }} />
         </button>
         <button
@@ -321,7 +448,7 @@ export default function ResultsPage() {
             </div>
           </div>
 
-          {/* Explainable AI Chat Panel */}
+          {/* Explainable AI Chat Panel (RAG-grounded) */}
           <div className="bg-surface-container-low rounded-lg p-4 border border-outline-variant flex flex-col gap-3">
             <h4 className="font-label-md text-label-md text-primary font-semibold mb-1 flex items-center gap-1">
               <MdAutoAwesome className="text-[18px]" /> Ask about this X-ray
@@ -343,6 +470,23 @@ export default function ResultsPage() {
                     }`}
                   >
                     {m.content}
+                    {m.role === 'assistant' && m.sources && m.sources.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-outline-variant/40 flex flex-wrap gap-1">
+                        {m.sources.map((s, si) => (
+                          <span
+                            key={si}
+                            title={s.snippet}
+                            className={`text-[10px] px-2 py-0.5 rounded-full border cursor-help ${
+                              s.type === 'knowledge'
+                                ? 'border-primary/40 text-primary'
+                                : 'border-secondary/40 text-secondary'
+                            }`}
+                          >
+                            {s.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -383,21 +527,25 @@ export default function ResultsPage() {
             </form>
 
             <p className="font-body-sm text-body-sm text-on-surface-variant/70">
-              AI-generated explanation for support purposes only — not a clinical diagnosis.
+              AI-generated explanation for support purposes only — not a clinical diagnosis. Small badges under an answer (e.g. &quot;KB1&quot;, &quot;Case #12&quot;) show which reference notes or past cases informed it — hover to preview.
             </p>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 mt-4">
             <button
               onClick={downloadReport}
-              className="flex-1 bg-primary text-on-primary font-label-md text-label-md py-3 px-4 rounded-lg hover:bg-primary-fixed-dim transition-colors flex justify-center items-center gap-2 shadow-sm"
+              disabled={reportGenerating}
+              className="flex-1 bg-primary text-on-primary font-label-md text-label-md py-3 px-4 rounded-lg hover:bg-primary-fixed-dim transition-colors flex justify-center items-center gap-2 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <MdDownload className="text-[18px]" /> Download Report
+              <MdDownload className="text-[18px]" /> {reportGenerating ? 'Generating…' : 'Download Report'}
             </button>
             <div className="flex-1 bg-surface text-on-surface-variant border border-outline-variant font-label-md text-label-md py-3 px-4 rounded-lg flex justify-center items-center gap-2 opacity-70 cursor-default">
               <MdCheckCircle className="text-[18px] text-green-500" /> Already Saved
             </div>
           </div>
+          {reportError && (
+            <p className="font-body-sm text-body-sm text-error text-center">{reportError}</p>
+          )}
         </div>
       </div>
     </div>

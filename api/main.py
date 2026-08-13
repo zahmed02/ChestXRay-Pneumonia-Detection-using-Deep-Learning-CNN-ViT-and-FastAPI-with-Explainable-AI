@@ -11,6 +11,7 @@ from api.database import engine
 from api import models                     # <-- correct import
 from api.routers import predict, history, stats, explain
 from api.dependencies import load_model
+from api.rag import get_embedder, get_knowledge_collection, get_case_collection
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
@@ -36,8 +37,15 @@ if os.path.exists("uploads"):
 
 @app.on_event("startup")
 async def startup():
-    load_model()  # preload model
+    load_model()  # preload classifier
     print("Model loaded successfully.")
+    try:
+        get_embedder()             # downloads/loads the local embedding model once
+        get_knowledge_collection()
+        get_case_collection()
+        print("RAG (embeddings + vector store) initialized.")
+    except Exception as e:
+        print(f"Warning: RAG initialization failed: {e}")
 
 @app.get("/health")
 async def health():
