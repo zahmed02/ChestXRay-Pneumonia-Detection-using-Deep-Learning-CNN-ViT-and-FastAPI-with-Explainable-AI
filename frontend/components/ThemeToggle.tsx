@@ -1,26 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { MdLightMode, MdDarkMode } from 'react-icons/md'
+import { MdDarkMode, MdLightMode } from 'react-icons/md'
 
 export default function ThemeToggle() {
-  const [dark, setDark] = useState(false)
+  const [dark, setDark] = useState(true)
 
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains('dark')
-    setDark(isDark)
+    const saved = window.localStorage.getItem('pneumoniaai-theme')
+    const isDark = saved ? saved === 'dark' : true
+    document.documentElement.classList.toggle('dark', isDark)
+    document.documentElement.classList.toggle('light', !isDark)
+    const timer = window.setTimeout(() => setDark(isDark), 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   const toggle = () => {
-    const html = document.documentElement
-    html.classList.toggle('dark')
-    html.classList.toggle('light')
-    setDark(html.classList.contains('dark'))
+    const next = !dark
+    document.documentElement.classList.toggle('dark', next)
+    document.documentElement.classList.toggle('light', !next)
+    window.localStorage.setItem('pneumoniaai-theme', next ? 'dark' : 'light')
+    setDark(next)
   }
 
-  return (
-    <button onClick={toggle} className="text-on-surface-variant hover:text-primary transition-colors">
-      {dark ? <MdLightMode size={24} /> : <MdDarkMode size={24} />}
-    </button>
-  )
+  return <button type="button" onClick={toggle} aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'} className="flex size-10 items-center justify-center rounded-full border bg-card text-muted-foreground transition hover:border-primary hover:text-primary">{dark ? <MdLightMode /> : <MdDarkMode />}</button>
 }
