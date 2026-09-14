@@ -2,53 +2,30 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { MdHistory, MdLocalHospital, MdUploadFile } from 'react-icons/md'
 import ThemeToggle from './ThemeToggle'
-import { MdNotifications, MdSettings } from 'react-icons/md'
 
 export default function Navbar() {
   const pathname = usePathname()
-  const navItems = [
-    { name: 'Predict', href: '/' },
-    { name: 'History', href: '/history' },
+  const items = [
+    { name: 'New analysis', href: '/', icon: MdUploadFile },
+    { name: 'History', href: '/history', icon: MdHistory },
   ]
 
   return (
-    <header className="bg-surface dark:bg-surface-dim border-b border-outline-variant shadow-sm h-16 px-4 lg:px-8 flex items-center justify-between sticky top-0 z-50">
-      <div className="flex items-center gap-4">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="text-primary font-headline-md text-headline-md font-bold">PneumoniaAI</span>
+    <header className="sticky top-0 z-50 border-b bg-background/90 backdrop-blur-xl">
+      <div className="mx-auto flex h-18 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+        <Link href="/" className="flex items-center gap-3" aria-label="PneumoniaAI home">
+          <span className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"><MdLocalHospital className="text-2xl" /></span>
+          <span><span className="block font-display text-lg font-extrabold tracking-tight">PneumoniaAI</span><span className="hidden text-[10px] font-semibold uppercase tracking-[.18em] text-muted-foreground sm:block">Chest X-ray lab</span></span>
         </Link>
-        <nav className="hidden md:flex gap-6 h-full items-center">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`text-body-md font-medium transition-colors h-full flex items-center border-b-2 ${
-                pathname === item.href
-                  ? 'text-primary border-primary'
-                  : 'text-on-surface-variant border-transparent hover:text-primary hover:border-primary'
-              }`}
-            >
-              {item.name}
-            </Link>
-          ))}
+        <nav className="flex items-center gap-1 rounded-full border bg-card p-1" aria-label="Primary navigation">
+          {items.map(({ name, href, icon: Icon }) => {
+            const active = pathname === href
+            return <Link key={href} href={href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition-colors sm:px-4 ${active ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}><Icon data-icon="inline-start" /> <span className="hidden sm:inline">{name}</span></Link>
+          })}
         </nav>
-      </div>
-      <div className="flex items-center gap-3">
-        <ThemeToggle />
-        <button className="text-on-surface-variant hover:text-primary transition-colors">
-          <MdNotifications size={24} />
-        </button>
-        <button className="text-on-surface-variant hover:text-primary transition-colors">
-          <MdSettings size={24} />
-        </button>
-        <div className="w-8 h-8 rounded-full overflow-hidden border border-outline-variant">
-          <img
-            src="https://lh3.googleusercontent.com/aida-public/AB6AXuBlJQYUMYGMQqoexBCjKXyxmpe_cTHN_JHkgZScCyqmWOgNThaKjAgYVLvMPQMHEoUnvIfdlAuTIt7tQap_QlPxHbzyPaUfs693awBsnSWYcRxE1ugqUCHrwqmYCU7YiwTLjUe-Ox6titpYQT0NOIoThJ-z-JbFLKYSKbsBibcTkNueRZ-ZSW35QkHqybBYoDKI1Jmk3JUPalvyZJwwyfim3C3sRFsLYypvxkWsSqRzYcCk4D4Ro_Q9cg"
-            alt="Profile"
-            className="w-full h-full object-cover"
-          />
-        </div>
+        <div className="flex items-center gap-3"><span className="hidden items-center gap-2 text-xs font-medium text-muted-foreground lg:flex"><span className="size-2 rounded-full bg-primary" /> API guidance active</span><ThemeToggle /></div>
       </div>
     </header>
   )

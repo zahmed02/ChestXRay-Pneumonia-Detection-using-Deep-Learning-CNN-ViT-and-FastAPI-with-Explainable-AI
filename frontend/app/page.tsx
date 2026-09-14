@@ -1,329 +1,66 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import axios from 'axios'
 import { useDropzone } from 'react-dropzone'
 import toast, { Toaster } from 'react-hot-toast'
-import {
-  MdCloudUpload,
-  MdVerified,
-  MdWarning,
-  MdTrendingUp,
-  MdTrendingDown,
-  MdDns,
-  MdVisibility,
-} from 'react-icons/md'
+import { MdArrowForward, MdCloudUpload, MdDns, MdImageSearch, MdOpenInNew, MdShield, MdWarning } from 'react-icons/md'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+interface Prediction { patient_id: string; class_name: string; confidence: number; heatmap_base64?: string | null }
+interface Stats { total: number; normal: number; pneumonia: number }
+interface Recent { id: number; patient_id: string; diagnosis: string; confidence: number; created_at: string }
 
-interface PredictionResponse {
-  patient_id: string
-  class_name: string
-  confidence: number
-  heatmap_base64?: string | null
-  image_url?: string
-}
-
-interface Stats {
-  total: number
-  normal: number
-  pneumonia: number
-}
-
-export default function Dashboard() {
+export default function AnalysisPage() {
   const [file, setFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [preview, setPreview] = useState<string | null>(null)
   const [patientId, setPatientId] = useState('')
-  const [prediction, setPrediction] = useState<PredictionResponse | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [prediction, setPrediction] = useState<Prediction | null>(null)
   const [stats, setStats] = useState<Stats>({ total: 0, normal: 0, pneumonia: 0 })
-  const [recent, setRecent] = useState<any[]>([])
+  const [recent, setRecent] = useState<Recent[]>([])
+  const [loading, setLoading] = useState(false)
+  const [serviceError, setServiceError] = useState(false)
 
-  useEffect(() => {
-    fetchStats()
-    fetchRecent()
-  }, [])
-
-  const fetchStats = async () => {
+  const refreshOverview = async () => {
     try {
-      const res = await axios.get(`${API_URL}/api/v1/stats`)
-      setStats(res.data)
-    } catch (err) {
-      console.error('Failed to fetch stats', err)
-    }
+      const [statsRes, historyRes] = await Promise.all([axios.get(`${API_URL}/api/v1/stats`), axios.get(`${API_URL}/api/v1/history?limit=5`)]);
+      setStats(statsRes.data); setRecent(historyRes.data.items || []); setServiceError(false)
+    } catch { setServiceError(true) }
+  }
+  useEffect(() => { const timer = window.setTimeout(() => { void refreshOverview() }, 0); return () => window.clearTimeout(timer) }, [])
+
+  const onDrop = (files: File[]) => {
+    const next = files[0]; if (!next) return
+    setFile(next); setPrediction(null)
+    const reader = new FileReader(); reader.onload = () => setPreview(String(reader.result)); reader.readAsDataURL(next)
+  }
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({ accept: { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'application/dicom': ['.dcm'] }, maxFiles: 1, maxSize: 50 * 1024 * 1024, onDrop, onDropRejected: () => toast.error('Use a JPG, PNG, or DICOM image up to 50 MB.') })
+
+  const submit = async () => {
+    if (!file) return toast.error('Choose an X-ray image before starting an analysis.')
+    const data = new FormData(); data.append('file', file); if (patientId.trim()) data.append('patient_id', patientId.trim())
+    setLoading(true); setServiceError(false)
+    try { const res = await axios.post<Prediction>(`${API_URL}/api/v1/predict`, data); setPrediction(res.data); await refreshOverview(); toast.success('Analysis complete') }
+    catch { setServiceError(true); toast.error('The analysis service could not be reached.') }
+    finally { setLoading(false) }
   }
 
-  const fetchRecent = async () => {
-    try {
-      const res = await axios.get(`${API_URL}/api/v1/history?limit=5`)
-      setRecent(res.data.items || [])
-    } catch (err) {
-      console.error('Failed to fetch recent', err)
-    }
-  }
-
-  const onDrop = (acceptedFiles: File[]) => {
-    const file = acceptedFiles[0]
-    setFile(file)
-    setPrediction(null)
-    // Create preview URL
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      setImagePreview(reader.result as string)
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const { getRootProps, getInputProps } = useDropzone({
-    accept: { 'image/*': [] },
-    maxFiles: 1,
-    onDrop,
-  })
-
-  const handleSubmit = async () => {
-    if (!file) {
-      toast.error('Please select an image first')
-      return
-    }
-
-    const formData = new FormData()
-    formData.append('file', file)
-    if (patientId.trim()) {
-      formData.append('patient_id', patientId.trim())
-    }
-
-    setLoading(true)
-    try {
-      const response = await axios.post<PredictionResponse>(`${API_URL}/api/v1/predict`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setPrediction(response.data)
-      toast.success('Prediction received!')
-      fetchStats()
-      fetchRecent()
-    } catch (error) {
-      console.error(error)
-      toast.error('Failed to get prediction. Make sure the backend is running.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="space-y-8">
-      <Toaster position="top-center" />
-
-      <header className="border-b border-outline-variant pb-4">
-        <h1 className="font-headline-lg text-headline-lg text-on-surface">New Chest X-Ray Analysis</h1>
-        <p className="font-body-md text-on-surface-variant mt-2">Upload DICOM, JPEG, or PNG files for AI-assisted pneumonia detection.</p>
-      </header>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Upload & Result */}
-        <div className="lg:col-span-8 space-y-6">
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm">
-            <div
-              {...getRootProps()}
-              className="border-2 border-dashed border-outline-variant rounded-lg p-10 flex flex-col items-center justify-center text-center hover:bg-surface-container-low transition-colors cursor-pointer min-h-[300px] relative"
-            >
-              <input {...getInputProps()} />
-              {imagePreview ? (
-                // Show image preview
-                <div className="relative w-full max-h-64 overflow-hidden rounded-lg">
-                  <img src={imagePreview} alt="Preview" className="max-h-64 object-contain mx-auto" />
-                  {loading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                      <div className="flex gap-2">
-                        <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse"></div>
-                        <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse delay-150"></div>
-                        <div className="w-4 h-4 bg-blue-500 rounded-full animate-pulse delay-300"></div>
-                      </div>
-                    </div>
-                  )}
-                  <p className="mt-2 text-sm text-on-surface-variant">Click or drag to replace</p>
-                </div>
-              ) : (
-                // Empty state
-                <>
-                  <MdCloudUpload className="text-6xl text-primary mb-4 opacity-80" />
-                  <h3 className="font-headline-md text-headline-md text-on-surface mb-2">Drag & Drop X-Ray Scans</h3>
-                  <p className="font-body-md text-on-surface-variant mb-4">or click to browse local files (JPG, PNG, DICOM)</p>
-                  <button className="bg-primary text-on-primary font-label-md px-6 py-2 rounded-lg hover:bg-on-primary-fixed-variant transition-colors">
-                    Select Files
-                  </button>
-                </>
-              )}
-              <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center text-label-sm text-on-surface-variant bg-surface/50 backdrop-blur-sm p-2 rounded border border-outline-variant/50">
-                <span className="flex items-center gap-1">
-                  <MdVerified className="text-[16px]" /> HIPAA Compliant
-                </span>
-                <span>Max file size: 50MB</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Patient ID input */}
-          <div className="flex items-center gap-4">
-            <label htmlFor="patient-id" className="font-label-md text-on-surface">Patient ID (optional):</label>
-            <input
-              id="patient-id"
-              type="text"
-              placeholder="e.g., PX-12345"
-              value={patientId}
-              onChange={(e) => setPatientId(e.target.value)}
-              className="flex-1 max-w-xs px-4 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-on-surface-variant/50"
-            />
-          </div>
-
-          {/* Submit button */}
-          <div className="flex justify-center">
-            <button
-              onClick={handleSubmit}
-              disabled={!file || loading}
-              className="px-8 py-3 bg-primary text-on-primary font-semibold rounded-lg shadow hover:bg-on-primary-fixed-variant disabled:opacity-50 disabled:cursor-not-allowed transition relative"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin"></span>
-                  Scanning...
-                </span>
-              ) : (
-                'Predict Pneumonia'
-              )}
-            </button>
-          </div>
-
-          {/* Prediction Result (unchanged) */}
-          {prediction && (
-            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm border-t-4 border-t-error">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h2 className="font-headline-lg text-headline-lg text-on-surface">Analysis Results</h2>
-                  <p className="font-body-md text-on-surface-variant">Patient ID: {prediction.patient_id}</p>
-                </div>
-                <div className={`px-4 py-2 rounded-full font-bold text-sm flex items-center gap-2 ${prediction.class_name === 'PNEUMONIA' ? 'bg-error-container text-on-error-container' : 'bg-secondary-container text-on-secondary-container'}`}>
-                  <MdWarning className="text-[18px]" />
-                  {prediction.class_name === 'PNEUMONIA' ? 'PNEUMONIA DETECTED' : 'NORMAL'}
-                </div>
-              </div>
-              <hr className="border-outline-variant my-4" />
-              <div className="flex items-center gap-6">
-                <div className="relative w-24 h-24 flex-shrink-0">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                    <path className="text-surface-variant stroke-current" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" strokeWidth="3" />
-                    <path className={`stroke-current ${prediction.class_name === 'PNEUMONIA' ? 'text-error' : 'text-primary'}`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" strokeDasharray={`${prediction.confidence * 100}, 100`} strokeWidth="3" />
-                  </svg>
-                  <div className="absolute inset-0 flex items-center justify-center flex-col">
-                    <span className="font-headline-md text-headline-md text-on-surface font-bold">{(prediction.confidence * 100).toFixed(1)}%</span>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-headline-md text-headline-md text-on-surface mb-1">High Confidence</h3>
-                  <p className="font-body-md text-on-surface-variant">The AI model indicates a high probability of {prediction.class_name.toLowerCase()} based on radiologic features.</p>
-                </div>
-              </div>
-              {prediction.heatmap_base64 && (
-                <div className="mt-4">
-                  <p className="text-sm text-on-surface-variant">Grad‑CAM Heatmap</p>
-                  <img src={prediction.heatmap_base64} alt="Heatmap" className="mt-2 max-w-xs rounded shadow" />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Statistics (unchanged) */}
-        <div className="lg:col-span-4 space-y-6">
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-6 shadow-sm border-t-4 border-t-primary">
-            <h3 className="font-headline-md text-headline-md text-on-surface mb-4">Today's Statistics</h3>
-            <div className="space-y-3">
-              <div className="bg-surface-container-low rounded-lg p-4 border border-outline-variant flex items-center justify-between">
-                <div>
-                  <p className="font-label-md text-on-surface-variant mb-1">Total Predictions</p>
-                  <p className="font-headline-lg text-headline-lg text-on-surface">{stats.total}</p>
-                </div>
-                <div className="w-16 h-8 bg-surface-variant rounded flex items-end overflow-hidden">
-                  <div className="w-1/4 h-[30%] bg-primary mx-px"></div>
-                  <div className="w-1/4 h-[60%] bg-primary mx-px"></div>
-                  <div className="w-1/4 h-[45%] bg-primary mx-px"></div>
-                  <div className="w-1/4 h-[80%] bg-primary mx-px"></div>
-                </div>
-              </div>
-              <div className="bg-surface-container-low rounded-lg p-4 border border-outline-variant flex items-center justify-between relative overflow-hidden">
-                <div className="absolute left-0 top-0 bottom-0 w-1 bg-secondary-container"></div>
-                <div className="pl-2">
-                  <p className="font-label-md text-on-surface-variant mb-1">Normal</p>
-                  <p className="font-headline-md text-headline-md text-on-surface">{stats.normal}</p>
-                </div>
-                <MdTrendingUp className="text-secondary-container text-3xl" />
-              </div>
-              <div className="bg-surface-container-low rounded-lg p-4 border border-outline-variant flex items-center justify-between relative overflow-hidden">
-                <div className="absolute left-0 top-0 bottom-0 w-1 bg-error-container"></div>
-                <div className="pl-2">
-                  <p className="font-label-md text-on-surface-variant mb-1">Pneumonia Detected</p>
-                  <p className="font-headline-md text-headline-md text-on-surface">{stats.pneumonia}</p>
-                </div>
-                <MdTrendingDown className="text-error-container text-3xl" />
-              </div>
-            </div>
-          </div>
-          <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm flex items-center gap-4">
-            <div className="h-10 w-10 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container">
-              <MdDns className="text-2xl" />
-            </div>
-            <div>
-              <p className="font-label-md text-on-surface">AI Model Status: Online</p>
-              <p className="font-label-sm text-label-sm text-on-surface-variant">v2.4.1 - Latency: 42ms</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Activity Table (unchanged) */}
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden mt-8">
-        <div className="px-6 py-4 border-b border-outline-variant bg-surface-container-low flex justify-between items-center">
-          <h3 className="font-headline-md text-headline-md text-on-surface">Recent Activity</h3>
-          <a href="/history" className="text-primary text-label-md hover:underline">View All</a>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-surface-container-lowest border-b border-outline-variant">
-                <th className="px-6 py-2 font-label-md text-on-surface-variant">Patient ID</th>
-                <th className="px-6 py-2 font-label-md text-on-surface-variant">Timestamp</th>
-                <th className="px-6 py-2 font-label-md text-on-surface-variant">AI Confidence</th>
-                <th className="px-6 py-2 font-label-md text-on-surface-variant">Status</th>
-                <th className="px-6 py-2 font-label-md text-on-surface-variant text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-4 text-center text-on-surface-variant">No predictions yet</td>
-                </tr>
-              ) : (
-                recent.map((item) => (
-                  <tr key={item.id} className="border-b border-outline-variant hover:bg-surface-container-low transition-colors">
-                    <td className="px-6 py-3 font-body-md text-on-surface">{item.patient_id}</td>
-                    <td className="px-6 py-3 font-body-md text-on-surface-variant">{new Date(item.created_at).toLocaleString()}</td>
-                    <td className="px-6 py-3 font-body-md text-on-surface-variant">{(item.confidence * 100).toFixed(1)}%</td>
-                    <td className="px-6 py-3">
-                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${item.diagnosis === 'PNEUMONIA' ? 'bg-error-container text-on-error-container' : 'bg-secondary-container text-on-secondary-container'}`}>
-                        {item.diagnosis === 'PNEUMONIA' ? 'Pneumonia Detected' : 'Normal'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      <a href={`/results?id=${item.id}`} className="text-primary hover:text-on-primary-fixed-variant">
-                        <MdVisibility className="text-xl" />
-                      </a>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+  return <div className="flex flex-col gap-8"><Toaster position="top-center" />
+    <section className="surface-grid relative overflow-hidden rounded-3xl border bg-card px-6 py-8 sm:px-10 lg:py-10">
+      <div className="relative max-w-3xl"><p className="eyebrow">AI-assisted radiology workflow</p><h1 className="mt-3 text-4xl font-extrabold leading-tight sm:text-5xl">Review a chest X-ray with clarity.</h1><p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">Upload one image to receive a pneumonia classification, confidence score, and model attention view for review.</p></div>
+      <div className="mt-6 flex flex-wrap gap-3 text-xs font-semibold text-muted-foreground"><span className="rounded-full bg-secondary px-3 py-2 text-secondary-foreground">Private workflow</span><span className="rounded-full bg-muted px-3 py-2">JPG · PNG · DICOM</span><span className="rounded-full bg-muted px-3 py-2">Max 50 MB</span></div>
+    </section>
+    {serviceError && <div role="alert" className="flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm"><MdDns className="mt-0.5 shrink-0 text-destructive" /><span><strong>Analysis service unavailable.</strong> Start the FastAPI backend, then retry this request.</span></div>}
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="clinical-card p-5 sm:p-7"><div className="mb-5 flex items-center justify-between"><div><p className="eyebrow">Step 01</p><h2 className="mt-1 text-2xl font-bold">Add an X-ray</h2></div><MdImageSearch className="text-3xl text-primary" /></div>
+        <div {...getRootProps()} className={`flex min-h-[290px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-6 text-center transition ${isDragActive ? 'border-primary bg-secondary' : 'border-border bg-muted/40 hover:border-primary hover:bg-secondary/50'}`}><input {...getInputProps()} />{preview ? <><img src={preview} alt="Selected chest X-ray preview" className="max-h-56 max-w-full rounded-xl object-contain" /><p className="mt-4 text-sm font-semibold text-primary">Click or drop another image to replace</p></> : <><span className="mb-4 flex size-16 items-center justify-center rounded-2xl bg-secondary text-primary"><MdCloudUpload className="text-4xl" /></span><h3 className="text-lg font-bold">Drop an image here</h3><p className="mt-2 text-sm text-muted-foreground">or select a file from your device</p><span className="mt-5 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">Browse files</span></>}</div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end"><label className="flex flex-col gap-2 text-sm font-semibold">Patient ID <span className="font-normal text-muted-foreground">Optional reference for your report</span><input value={patientId} onChange={e => setPatientId(e.target.value)} placeholder="e.g. PX-12345" className="h-11 rounded-xl border bg-background px-3 font-normal outline-none transition placeholder:text-muted-foreground focus:ring-2 focus:ring-ring" /></label><button onClick={submit} disabled={!file || loading} className="h-11 rounded-xl bg-primary px-6 font-bold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{loading ? 'Analyzing…' : 'Run analysis'}<MdArrowForward className="ml-2 inline" /></button></div>
+        <p className="mt-5 flex items-center gap-2 text-xs text-muted-foreground"><MdShield className="text-primary" /> Use de-identified images and follow your organization&apos;s data handling policy.</p>
+      </section>
+      <aside className="flex flex-col gap-6"><section className="clinical-card p-6"><p className="eyebrow">Workspace overview</p><h2 className="mt-1 text-xl font-bold">Review activity</h2><div className="mt-5 grid grid-cols-3 gap-2 text-center"><div className="rounded-xl bg-muted p-3"><strong className="block text-2xl">{stats.total}</strong><span className="text-[11px] text-muted-foreground">Total</span></div><div className="rounded-xl bg-secondary p-3"><strong className="block text-2xl text-secondary-foreground">{stats.normal}</strong><span className="text-[11px] text-muted-foreground">Normal</span></div><div className="rounded-xl bg-destructive/10 p-3"><strong className="block text-2xl text-destructive">{stats.pneumonia}</strong><span className="text-[11px] text-muted-foreground">Flagged</span></div></div></section><section className="clinical-card p-6"><div className="flex items-start gap-3"><MdWarning className="mt-0.5 text-warning" /><div><h3 className="font-bold">Review responsibly</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">Model output is an aid for review. Confirm findings with qualified clinical judgment.</p></div></div></section></aside>
     </div>
-  )
+    {prediction && <section className={`clinical-card overflow-hidden border-t-4 ${prediction.class_name === 'PNEUMONIA' ? 'border-t-destructive' : 'border-t-primary'}`}><div className="flex flex-col gap-6 p-6 sm:flex-row sm:items-center sm:justify-between"><div><p className="eyebrow">Step 02 · Result ready</p><h2 className="mt-1 text-2xl font-bold">{prediction.class_name === 'PNEUMONIA' ? 'Pneumonia flagged' : 'No pneumonia flagged'}</h2><p className="mt-2 text-sm text-muted-foreground">Patient ID: {prediction.patient_id} · Model confidence {Math.round(prediction.confidence * 1000) / 10}%</p></div><div className="flex items-center gap-3"><span className={`rounded-full px-4 py-2 text-sm font-bold ${prediction.class_name === 'PNEUMONIA' ? 'bg-destructive/10 text-destructive' : 'bg-secondary text-secondary-foreground'}`}>{Math.round(prediction.confidence * 100)}% confidence</span><Link href={`/results?id=${prediction.patient_id}`} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground">Open report <MdOpenInNew className="ml-1 inline" /></Link></div></div>{prediction.heatmap_base64 && <div className="border-t bg-muted/40 px-6 py-4 text-sm text-muted-foreground">A model attention heatmap is available in the full report.</div>}</section>}
+    <section className="clinical-card overflow-hidden"><div className="flex items-center justify-between border-b px-6 py-5"><div><p className="eyebrow">Recent activity</p><h2 className="mt-1 text-xl font-bold">Latest analyses</h2></div><Link href="/history" className="text-sm font-bold text-primary hover:underline">View history <MdArrowForward className="ml-1 inline" /></Link></div><div className="overflow-x-auto">{recent.length ? <table className="w-full text-left text-sm"><thead className="bg-muted text-xs uppercase tracking-wider text-muted-foreground"><tr><th className="px-6 py-3">Patient ID</th><th className="px-6 py-3">Date</th><th className="px-6 py-3">Finding</th><th className="px-6 py-3 text-right">Report</th></tr></thead><tbody>{recent.map(item => <tr key={item.id} className="border-t hover:bg-muted/40"><td className="px-6 py-4 font-semibold">{item.patient_id}</td><td className="px-6 py-4 text-muted-foreground">{new Date(item.created_at).toLocaleString()}</td><td className="px-6 py-4">{item.diagnosis === 'PNEUMONIA' ? <span className="font-semibold text-destructive">Pneumonia flagged</span> : <span className="font-semibold text-primary">Normal</span>}</td><td className="px-6 py-4 text-right"><Link href={`/results?id=${item.id}`} className="font-bold text-primary hover:underline">Open</Link></td></tr>)}</tbody></table> : <div className="p-8 text-center text-sm text-muted-foreground">No analyses yet. Your completed reports will appear here.</div>}</div></section>
+  </div>
 }

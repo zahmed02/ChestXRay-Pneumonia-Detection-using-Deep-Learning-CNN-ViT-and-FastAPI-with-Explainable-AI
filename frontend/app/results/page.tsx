@@ -1,7 +1,7 @@
 /* D:\IT-Project-2\frontend\app\results\page.tsx */
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import jsPDF from 'jspdf'
 import 'jspdf-autotable'
@@ -48,7 +48,7 @@ interface LoadedImage {
   height: number
 }
 
-export default function ResultsPage() {
+function ResultsContent() {
   const searchParams = useSearchParams()
   const id = searchParams.get('id')
   const [prediction, setPrediction] = useState<PredictionDetail | null>(null)
@@ -70,8 +70,8 @@ export default function ResultsPage() {
 
   useEffect(() => {
     if (!id) {
-      setLoading(false)
-      return
+      const timer = window.setTimeout(() => setLoading(false), 0)
+      return () => window.clearTimeout(timer)
     }
     fetch(`${API_URL}/api/v1/prediction/${id}`)
       .then(res => {
@@ -550,4 +550,8 @@ export default function ResultsPage() {
       </div>
     </div>
   )
+}
+
+export default function ResultsPage() {
+  return <Suspense fallback={<div className="py-20 text-center text-muted-foreground">Loading report…</div>}><ResultsContent /></Suspense>
 }
